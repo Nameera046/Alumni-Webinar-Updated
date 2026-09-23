@@ -366,7 +366,7 @@ app.get('/api/webinars', async (req, res) => {
 app.get('/api/webinars/:id', async (req, res) => {
   try {
     const webinar = await WebinarWebinar.findById(req.params.id)
-      .populate('speaker', 'name designation department batch companyName');
+      .populate('speaker', 'name designation department batch companyName speakerPhoto email');
     if (!webinar) {
       return res.status(404).json({ error: 'Webinar not found' });
     }

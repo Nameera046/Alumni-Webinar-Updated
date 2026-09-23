@@ -16,18 +16,38 @@ router.get('/admin/webinars/completed-documents', async (req, res) => {
       return res.status(500).json({ error: 'Required models not available' });
     }
 
-    const docs = await CompletedWebinarDocuments.find({}).lean();
-    const legacyDocs = CompletedWebinarDetails ? await CompletedWebinarDetails.find({}).lean() : [];
+    // Project only presence flags. Attendance sheets and reports can contain
+    // large base64 payloads; loading those blobs just to render this table is
+    // needlessly slow.
+    const documentPresencePipeline = [
+      {
+        $project: {
+          webinarId: 1,
+          hasAttendanceSheet: { $ne: [{ $ifNull: ['$attendanceSheet', ''] }, ''] },
+          hasSignedReport: { $ne: [{ $ifNull: ['$signedReport', ''] }, ''] },
+          hasEventImages: { $gt: [{ $size: { $ifNull: ['$eventImages', []] } }, 0] },
+        },
+      },
+    ];
+    const [docs, legacyDocs] = await Promise.all([
+      CompletedWebinarDocuments.aggregate(documentPresencePipeline),
+      CompletedWebinarDetails
+        ? CompletedWebinarDetails.aggregate(documentPresencePipeline)
+        : Promise.resolve([]),
+    ]);
 
-    const docByWebinarId = Object.fromEntries(docs.map(d => [String(d.webinarId), d]));
-    legacyDocs.forEach((d) => {
-      const key = String(d.webinarId);
-      if (!docByWebinarId[key]) {
-        docByWebinarId[key] = d;
-      }
+    const presenceByWebinarId = new Map();
+    [...docs, ...legacyDocs].forEach((doc) => {
+      const key = String(doc.webinarId);
+      const existing = presenceByWebinarId.get(key) || {};
+      presenceByWebinarId.set(key, {
+        hasAttendanceSheet: existing.hasAttendanceSheet || doc.hasAttendanceSheet,
+        hasSignedReport: existing.hasSignedReport || doc.hasSignedReport,
+        hasEventImages: existing.hasEventImages || doc.hasEventImages,
+      });
     });
 
-    const webinarIds = Object.keys(docByWebinarId);
+    const webinarIds = [...presenceByWebinarId.keys()];
     const webinars = await Webinar.find({
       $or: [
         { _id: { $in: webinarIds } },
@@ -37,18 +57,27 @@ router.get('/admin/webinars/completed-documents', async (req, res) => {
       .select('phaseId domain topic webinarDate attendedCount status')
       .lean();
 
-    const rows = await Promise.all(
-      webinars.map(async (w) => {
-        const registeredCount = await WebinarRegister.countDocuments({ webinarId: w._id });
+    const registrationCounts = webinars.length
+      ? await WebinarRegister.aggregate([
+          { $match: { webinarId: { $in: webinars.map((webinar) => webinar._id) } } },
+          { $group: { _id: '$webinarId', count: { $sum: 1 } } },
+        ])
+      : [];
+    const registrationCountByWebinarId = new Map(
+      registrationCounts.map((item) => [String(item._id), item.count])
+    );
+
+    const rows = webinars.map((w) => {
+        const registeredCount = registrationCountByWebinarId.get(String(w._id)) || 0;
         const attendedCount = w.attendedCount ?? 0;
         const absenteeCount = registeredCount > attendedCount ? registeredCount - attendedCount : null;
 
-        const d = docByWebinarId[String(w._id)] || {};
-        const hasSignedReport = Boolean(d.signedReport && String(d.signedReport).length > 0);
+        const documentPresence = presenceByWebinarId.get(String(w._id)) || {};
+        const hasSignedReport = Boolean(documentPresence.hasSignedReport);
         const hasDocs = Boolean(
-          (d.attendanceSheet && String(d.attendanceSheet).length > 0) ||
+          documentPresence.hasAttendanceSheet ||
           hasSignedReport ||
-          (Array.isArray(d.eventImages) && d.eventImages.length > 0)
+          documentPresence.hasEventImages
         );
 
         return {
@@ -63,8 +92,7 @@ router.get('/admin/webinars/completed-documents', async (req, res) => {
           hasSignedReport,
           hasDocuments: hasDocs,
         };
-      })
-    );
+      });
 
     res.json({ success: true, data: rows });
   } catch (err) {

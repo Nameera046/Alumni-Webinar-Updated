@@ -1281,9 +1281,11 @@ export default function WebinarEvents() {
 
           {canUpload && (
             <button
-              onClick={() => navigate(`/webinar-details/${webinar._id}/${encodeURIComponent(userEmail)}`, { state: { webinar } })}
+              type="button"
+              onClick={() => navigate(`/webinar-details/${webinar._id}/${encodeURIComponent(userEmail || '')}`, { state: { webinar } })}
               className="view-details-button"
               title="View Webinar Details"
+              aria-label={`View details for ${webinar.title || 'webinar'}`}
             >
               <FiEye size={20} />
             </button>
@@ -1324,16 +1326,15 @@ export default function WebinarEvents() {
               />
               </div>
             </div>
-            {canUpload && (
-              <button
-                type="button"
-                className="webinar-poster-download-button"
-                onClick={handlePosterDownload}
-                disabled={isPosterDownloading}
-              >
-                {isPosterDownloading ? 'Preparing Poster...' : 'Download Poster'}
-              </button>
-            )}
+            <button
+              type="button"
+              className="webinar-poster-download-button"
+              onClick={handlePosterDownload}
+              disabled={isPosterDownloading}
+              aria-label={`Download poster for ${webinar.title || 'webinar'}`}
+            >
+              {isPosterDownloading ? 'Preparing Poster...' : 'Download Poster'}
+            </button>
           </div>
 
           {/* Right Side - Content */}

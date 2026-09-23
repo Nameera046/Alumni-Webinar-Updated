@@ -839,6 +839,8 @@ const Adminpage = ({ userEmail }) => {
 
   const [completedDocsRows, setCompletedDocsRows] = useState([]);
   const [completedDocsLoading, setCompletedDocsLoading] = useState(false);
+  const [completedDocsError, setCompletedDocsError] = useState('');
+  const [completedDocsLoaded, setCompletedDocsLoaded] = useState(false);
 
   // Webinar Docs filters + export (like prize winners page)
   const [webinarDocsFilters, setWebinarDocsFilters] = useState({
@@ -980,16 +982,22 @@ const Adminpage = ({ userEmail }) => {
   };
 
   useEffect(() => {
-    if (activeView !== 'webinarDocs') return;
+    if (activeView !== 'webinarDocs' || completedDocsLoaded) return;
 
     const fetchRows = async () => {
       try {
         setCompletedDocsLoading(true);
-        const res = await fetch(`${API_BASE_URL}/api/admin/webinars/completed-documents`);
+        setCompletedDocsError('');
+        const res = await fetch(`${API_BASE_URL}/api/admin/webinars/completed-documents`, {
+          signal: AbortSignal.timeout(20000),
+        });
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
         const json = await res.json();
         setCompletedDocsRows(Array.isArray(json.data) ? json.data : []);
+        setCompletedDocsLoaded(true);
       } catch (e) {
         console.error('Error fetching completed documents table:', e);
+        setCompletedDocsError('Could not load webinar details. Please reopen this tab to try again.');
         setCompletedDocsRows([]);
       } finally {
         setCompletedDocsLoading(false);
@@ -997,7 +1005,7 @@ const Adminpage = ({ userEmail }) => {
     };
 
     fetchRows();
-  }, [activeView]);
+  }, [activeView, completedDocsLoaded]);
 
   const renderContent = () => {
     switch (activeView) {
@@ -1092,6 +1100,10 @@ const Adminpage = ({ userEmail }) => {
                   {completedDocsLoading ? (
                     <tr>
                       <td colSpan={8} style={{ textAlign: 'center', padding: '20px' }}>Loading completed docs...</td>
+                    </tr>
+                  ) : completedDocsError ? (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '20px', color: '#b91c1c' }}>{completedDocsError}</td>
                     </tr>
                   ) : filteredCompletedDocsRows.length === 0 ? (
                     <tr>

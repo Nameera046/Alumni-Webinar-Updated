@@ -28,7 +28,16 @@ export default function WebinarDetails() {
   const { id, encodedUserEmail } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const userEmail = decodeURIComponent(encodedUserEmail);
+  const routeUserEmail = (() => {
+    try {
+      return encodedUserEmail ? decodeURIComponent(encodedUserEmail) : '';
+    } catch {
+      return '';
+    }
+  })();
+  const userEmail = routeUserEmail || localStorage.getItem('userEmail') || '';
+  const [canManageWebinar, setCanManageWebinar] = useState(() => localStorage.getItem('isAdmin') === 'true');
+  const [permissionLoading, setPermissionLoading] = useState(() => localStorage.getItem('isAdmin') !== 'true');
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editForm, setEditForm] = useState({
     topic: '',
@@ -62,6 +71,41 @@ export default function WebinarDetails() {
   const [speakerPhotoPreview, setSpeakerPhotoPreview] = useState('');
   const [speakerPhotoFile, setSpeakerPhotoFile] = useState(null);
   const minimumWebinarDate = getTodayDateInputValue();
+
+  useEffect(() => {
+    let isActive = true;
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    if (isAdmin) {
+      setCanManageWebinar(true);
+      setPermissionLoading(false);
+      return () => { isActive = false; };
+    }
+
+    if (!userEmail) {
+      setCanManageWebinar(false);
+      setPermissionLoading(false);
+      return () => { isActive = false; };
+    }
+
+    fetch(`${API_BASE_URL}/api/coordinators`)
+      .then((response) => response.ok ? response.json() : [])
+      .then((coordinators) => {
+        if (!isActive) return;
+        const email = userEmail.trim().toLowerCase();
+        setCanManageWebinar(Array.isArray(coordinators) && coordinators.some(
+          (coordinator) => String(coordinator.email || '').trim().toLowerCase() === email
+        ));
+      })
+      .catch((err) => {
+        console.error('Could not verify webinar coordinator access:', err);
+        if (isActive) setCanManageWebinar(false);
+      })
+      .finally(() => {
+        if (isActive) setPermissionLoading(false);
+      });
+
+    return () => { isActive = false; };
+  }, [userEmail]);
 
   const getSpeakerPhotoUrl = (photo) => {
     const value = String(photo || '').trim();
@@ -255,6 +299,7 @@ export default function WebinarDetails() {
   };
 
   useEffect(() => {
+    if (!canManageWebinar) return;
     if (!webinar) {
       // Only fetch if webinar data wasn't passed via state
       const fetchData = async () => {
@@ -333,7 +378,15 @@ export default function WebinarDetails() {
     };
 
     fetchFeedback();
-  }, [id, webinar]);
+  }, [id, webinar, canManageWebinar]);
+
+  if (permissionLoading) {
+    return <div className="student-form-page"><p className="text-center py-8">Checking access...</p></div>;
+  }
+
+  if (!canManageWebinar) {
+    return <div className="student-form-page"><p className="text-center py-8 text-red-600">You do not have permission to view webinar management details.</p></div>;
+  }
 
   if (loading) {
     return (
@@ -387,7 +440,7 @@ export default function WebinarDetails() {
           {/* Delete Button */}
           <div style={{ textAlign: 'right', margin: '20px 20px' }}>
             {/* Edit Webinar Button (visible on eye/details page) */}
-            <button
+            {canManageWebinar && <button
               className="edit-btn"
               onClick={() => {
                 if (!webinar) return;
@@ -431,9 +484,9 @@ export default function WebinarDetails() {
             >
               <SquarePen size={16} />
               Edit Webinar
-            </button>
+            </button>}
 
-            <button
+            {canManageWebinar && <button
               className="delete-btn"
               onClick={() => setShowDeleteDialog(true)}
 
@@ -453,7 +506,7 @@ export default function WebinarDetails() {
             >
               <Trash2 size={16} />
               {/* Delete Webinar */}
-            </button>
+            </button>}
           </div>
 
 
@@ -653,7 +706,7 @@ export default function WebinarDetails() {
                 </div>
 
                 <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                  <label>Speaker Photo</label>
+                  <label>Change Speaker Photo (optional)</label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                     {speakerPhotoPreview ? (
                       <img
@@ -683,7 +736,7 @@ export default function WebinarDetails() {
                           if (file) setSpeakerPhotoPreview(URL.createObjectURL(file));
                         }}
                       />
-                      <p style={{ marginTop: '4px', color: '#6b7280', fontSize: '0.75rem' }}>Optional replacement; JPG, PNG, or WEBP up to 200 KB.</p>
+                      <p style={{ marginTop: '4px', color: '#6b7280', fontSize: '0.75rem' }}>Choose a new JPG, PNG, or WEBP image up to 200 KB. Leave this empty to keep the current photo.</p>
                     </div>
                   </div>
                 </div>
