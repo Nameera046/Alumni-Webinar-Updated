@@ -15,7 +15,11 @@ import html2canvas from 'html2canvas';
 // Add API base URL
 const isLocalDev = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || (isLocalDev ? 'http://localhost:5000' : '/alumnimain')
+  import.meta.env.VITE_API_BASE_URL || (
+    isLocalDev
+      ? 'http://localhost:5000'
+      : (typeof window !== 'undefined' ? window.location.origin : '/alumnimain')
+  )
 ).replace(/\/$/, '');
 
 const POSTER_TARGET_BYTES = 200 * 1024;
@@ -889,56 +893,102 @@ export default function WebinarEvents() {
   const fetchWebinars = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/webinars`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch webinars');
+      setError(null);
+
+      const apiUrls = [];
+      const configuredApi = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
+
+      if (configuredApi) {
+        apiUrls.push(`${configuredApi}/api/webinars`);
       }
-      const data = await response.json();
 
-      // Group webinars by month
+      apiUrls.push(`${API_BASE_URL}/api/webinars`);
+
+      if (typeof window !== 'undefined') {
+        apiUrls.push(`${window.location.origin}/api/webinars`);
+      }
+
+      const uniqueUrls = [...new Set(apiUrls)];
+      let response = null;
+      let lastError = null;
+
+      for (const url of uniqueUrls) {
+        try {
+          console.log('Trying webinar API:', url);
+          const candidateResponse = await fetch(url, {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+          });
+
+          if (candidateResponse.ok) {
+            response = candidateResponse;
+            console.log('Webinar API connected:', url);
+            break;
+          }
+
+          lastError = new Error(
+            `Webinar API returned ${candidateResponse.status} ${candidateResponse.statusText}`
+          );
+        } catch (requestError) {
+          console.error(`Webinar API failed: ${url}`, requestError);
+          lastError = requestError;
+        }
+      }
+
+      if (!response) {
+        throw lastError || new Error('Unable to connect to webinar API');
+      }
+
+      const rawData = await response.json();
+      const data = Array.isArray(rawData)
+        ? rawData
+        : Array.isArray(rawData?.webinars)
+          ? rawData.webinars
+          : Array.isArray(rawData?.data)
+            ? rawData.data
+            : [];
+
+      if (!Array.isArray(data)) {
+        throw new Error('Invalid webinar API response');
+      }
+
       const groupedWebinars = data.reduce((acc, webinar) => {
-        const date = new Date(webinar.webinarDate);
-        const month = date.toLocaleString('default', { month: 'long' }).toLowerCase();
-        const year = date.getFullYear();
+        if (!webinar) return acc;
 
-        if (!acc[month]) {
-          acc[month] = [];
+        const date = new Date(webinar.webinarDate);
+        if (Number.isNaN(date.getTime())) {
+          console.warn('Skipping webinar with invalid date:', webinar);
+          return acc;
         }
 
-        // Transform data to match component structure
+        const month = date.toLocaleString('default', { month: 'long' }).toLowerCase();
+        const year = date.getFullYear();
+        const monthKey = `${month}-${year}`;
+        acc[monthKey] ||= [];
+
         const rawMeetingLink = String(webinar.meetingLink || '').trim();
         const resolvedJoinLink = /^https?:\/\//i.test(rawMeetingLink) ? rawMeetingLink : '';
+        const derivedStatus = getDerivedWebinarStatus(webinar);
 
-        const derivedStatus = getDerivedWebinarStatus({
-          ...webinar,
-          status: webinar.status,
-          feedbackCount: webinar.feedbackCount,
-          registeredCount: webinar.registeredCount,
-          hasUploads: webinar.hasUploads,
-          uploadsComplete: webinar.uploadsComplete,
-          webinarDate: webinar.webinarDate,
-          time: webinar.time,
-        });
-
-        acc[month].push({
+        acc[monthKey].push({
           _id: webinar._id,
           phaseId: webinar.phaseId,
-          title: webinar.topic,
-          slot: `${date.getDate()} ${date.toLocaleString('default', { month: 'short' })} ${year}, ${webinar.time}`,
+          title: webinar.topic || webinar.title || 'Untitled Webinar',
+          slot: `${date.getDate()} ${date.toLocaleString('default', { month: 'short' })} ${year}, ${webinar.time || 'TBD'}`,
           formattedDeadline: webinar.deadline ? new Date(webinar.deadline).toLocaleDateString('en-US', {
             day: 'numeric',
             month: 'short',
             year: 'numeric'
           }) : 'TBD',
-          registered: webinar.registeredCount || 0,
-          attendedCount: webinar.attendedCount || 0,
+          registered: Number(webinar.registeredCount || 0),
+          attendedCount: Number(webinar.attendedCount || 0),
           status: derivedStatus.label,
           statusKey: derivedStatus.key,
-          feedbackCount: webinar.feedbackCount || 0,
-          registeredCount: webinar.registeredCount || 0,
+          feedbackCount: Number(webinar.feedbackCount || 0),
+          registeredCount: Number(webinar.registeredCount || 0),
           hasUploads: Boolean(webinar.hasUploads),
           uploadsComplete: Boolean(webinar.uploadsComplete),
-          domain: webinar.domain,
+          domain: webinar.domain || 'TBD',
           speaker: {
             name: webinar.speaker?.name || 'TBD',
             designation: webinar.speaker?.designation || 'TBD',
@@ -948,7 +998,6 @@ export default function WebinarEvents() {
             companyName: webinar.speaker?.companyName || 'TBD',
             email: webinar.speaker?.email || null
           },
-          // Keep original data for modal
           webinarDate: webinar.webinarDate,
           deadline: webinar.deadline,
           time: webinar.time,
@@ -961,11 +1010,17 @@ export default function WebinarEvents() {
         return acc;
       }, {});
 
+      Object.values(groupedWebinars).forEach((monthWebinars) => {
+        monthWebinars.sort((a, b) => new Date(a.webinarDate) - new Date(b.webinarDate));
+      });
+
+      console.log('Total webinars loaded:', data.length);
       setWebinars(groupedWebinars);
       setError(null);
     } catch (err) {
       console.error('Error fetching webinars:', err);
-      setError('Failed to load webinars. Please try again later.');
+      setWebinars({});
+      setError(`Failed to load webinars. ${err?.message || 'Please try again later.'}`);
     } finally {
       setLoading(false);
     }
