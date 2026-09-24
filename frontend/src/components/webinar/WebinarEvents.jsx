@@ -18,11 +18,24 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || (
     isLocalDev
       ? 'http://localhost:5000'
-      : (typeof window !== 'undefined' ? window.location.origin : '/alumnimain')
+      : (typeof window !== 'undefined' ? `${window.location.origin}/alumnimain` : '/alumnimain')
   )
 ).replace(/\/$/, '');
 
 const POSTER_TARGET_BYTES = 200 * 1024;
+
+const decodeWebinarUserEmail = (value) => {
+  const candidate = String(value || '').trim();
+  if (!candidate) return '';
+  if (candidate.includes('@')) return candidate;
+
+  try {
+    const decoded = decodeURIComponent(atob(decodeURIComponent(candidate)));
+    return decoded.includes('@') ? decoded : '';
+  } catch {
+    return '';
+  }
+};
 
 const canvasToBlob = (canvas, quality) => new Promise((resolve) => {
   canvas.toBlob(resolve, 'image/jpeg', quality);
@@ -261,7 +274,7 @@ const WebinarDetail = ({ webinar, onClose, registrationEmail, onRegistrationEmai
   );
 };
 
-export default function WebinarEvents() {
+export default function WebinarEvents({ email: emailParam = '' }) {
   const navigate = useNavigate();
   const [selectedWebinar, setSelectedWebinar] = useState(null);
   const [popup, setPopup] = useState({ show: false, message: '', type: 'success' });
@@ -282,8 +295,13 @@ export default function WebinarEvents() {
   const [phases, setPhases] = useState([]);
   const [selectedPhase, setSelectedPhase] = useState(null);
   const [phaseLoading, setPhaseLoading] = useState(true);
-  const [userEmail, setUserEmail] = useState('');
-  const [isAdmin, setIsAdmin] = useState(false);
+  const routeEmail = decodeWebinarUserEmail(emailParam);
+  const storedEmail = localStorage.getItem('userEmail') || '';
+  const [userEmail, setUserEmail] = useState(routeEmail || storedEmail);
+  const [isAdmin, setIsAdmin] = useState(() => (
+    localStorage.getItem('isAdmin') === 'true' &&
+    (!routeEmail || routeEmail.trim().toLowerCase() === storedEmail.trim().toLowerCase())
+  ));
   const [coordinators, setCoordinators] = useState([]);
   const isAnyModalOpen =
     !!selectedWebinar ||
@@ -968,7 +986,9 @@ export default function WebinarEvents() {
 
         const rawMeetingLink = String(webinar.meetingLink || '').trim();
         const resolvedJoinLink = /^https?:\/\//i.test(rawMeetingLink) ? rawMeetingLink : '';
-        const derivedStatus = getDerivedWebinarStatus(webinar);
+        const derivedStatus = typeof getDerivedWebinarStatus === 'function'
+          ? getDerivedWebinarStatus(webinar)
+          : { key: 'planned', label: 'PLANNED' };
 
         acc[monthKey].push({
           _id: webinar._id,
@@ -1073,11 +1093,14 @@ export default function WebinarEvents() {
   useEffect(() => {
     const fetchUserInfo = () => {
       try {
-        const email = localStorage.getItem('userEmail');
-        const isAdmin = localStorage.getItem('isAdmin') === 'true';
+        const storedEmail = localStorage.getItem('userEmail') || '';
+        const email = decodeWebinarUserEmail(emailParam) || storedEmail;
+        const isAdmin = localStorage.getItem('isAdmin') === 'true' &&
+          (!emailParam || email.trim().toLowerCase() === storedEmail.trim().toLowerCase());
         if (email) {
           setUserEmail(email);
           setIsAdmin(isAdmin);
+          localStorage.setItem('userEmail', email);
         }
       } catch (error) {
         console.error('Error fetching user info:', error);
@@ -1089,7 +1112,16 @@ export default function WebinarEvents() {
         const response = await fetch(`${API_BASE_URL}/api/coordinators`);
         if (response.ok) {
           const coordinatorsData = await response.json();
-          setCoordinators(coordinatorsData);
+          const normalizedEmail = (decodeWebinarUserEmail(emailParam) || localStorage.getItem('userEmail') || '').trim().toLowerCase();
+          const matchingAdmin = Array.isArray(coordinatorsData) && coordinatorsData.some((coordinator) => (
+            String(coordinator.email || '').trim().toLowerCase() === normalizedEmail &&
+            String(coordinator.role || '').trim().toLowerCase() === 'admin'
+          ));
+          setCoordinators(Array.isArray(coordinatorsData) ? coordinatorsData : []);
+          setIsAdmin(matchingAdmin || (
+            localStorage.getItem('isAdmin') === 'true' &&
+            normalizedEmail === (localStorage.getItem('userEmail') || '').trim().toLowerCase()
+          ));
         }
       } catch (error) {
         console.error('Error fetching coordinators:', error);
@@ -1098,7 +1130,7 @@ export default function WebinarEvents() {
 
     fetchUserInfo();
     fetchCoordinators();
-  }, []);
+  }, [emailParam]);
 
   // Update registrationEmail when userEmail is set
   useEffect(() => {
@@ -1313,11 +1345,16 @@ export default function WebinarEvents() {
 })();
     const isFeedbackEnabled = feedbackWindow.enabled;
     const isCertificateEnabled = webinar.attendedCount > 0;
-    const isCoordinator = coordinators.some(
-      coord => String(coord.email || '').trim().toLowerCase() === userEmail.trim().toLowerCase()
-    );
+    const isCoordinator = coordinators.some((coord) => (
+      String(coord.email || '').trim().toLowerCase() === userEmail.trim().toLowerCase() &&
+      ['student', 'department', 'admin'].includes(String(coord.role || '').trim().toLowerCase())
+    ));
+    const isStudentCoordinator = coordinators.some((coord) => (
+      String(coord.email || '').trim().toLowerCase() === userEmail.trim().toLowerCase() &&
+      String(coord.role || '').trim().toLowerCase() === 'student'
+    ));
     const canUpload = isCoordinator || isAdmin;
-    const canViewStatus = !userEmail || isCoordinator || isAdmin;
+    const canViewStatus = isAdmin || isStudentCoordinator;
     const isOnlineLink = Boolean(webinar.joinLink);
     const derivedStatus = getDerivedWebinarStatus(webinar);
     const statusKey = getStatusCssKey(derivedStatus.key);

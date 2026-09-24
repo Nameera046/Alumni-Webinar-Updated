@@ -93,7 +93,10 @@ export default function WebinarDetails() {
         if (!isActive) return;
         const email = userEmail.trim().toLowerCase();
         setCanManageWebinar(Array.isArray(coordinators) && coordinators.some(
-          (coordinator) => String(coordinator.email || '').trim().toLowerCase() === email
+          (coordinator) => (
+            String(coordinator.email || '').trim().toLowerCase() === email &&
+            ['student', 'department', 'admin'].includes(String(coordinator.role || '').trim().toLowerCase())
+          )
         ));
       })
       .catch((err) => {
